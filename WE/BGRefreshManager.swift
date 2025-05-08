@@ -5,13 +5,16 @@
 //  Created by Yifei Jia on 2025/5/8.
 //
 
+
 import BackgroundTasks
 import Foundation
 import UserNotifications
+import UIKit
 
-struct BGRefreshManager {
+class BGRefreshManager {
     private var taskIdentifier = "tech.lklk.WE.refresh"
     static let shared = BGRefreshManager()
+
     var isBackgroundRefreshEnabled: Bool {
         UserDefaults.standard.bool(forKey: "isBackgroundRefreshEnabled")
     }
@@ -19,17 +22,60 @@ struct BGRefreshManager {
         UserDefaults.standard.string(forKey: "ymSessionID")
     }
 
-    func bgRefreshXFBTrans(completion: @escaping (Bool) -> Void) {
-        if isBackgroundRefreshEnabled {
-            sendLocalNotification(title: "Gugugu", body: "我刷新了")
+    private var transLastSerial: Int = UserDefaults.standard.integer(forKey: "transLastSerial") {
+        didSet {
+            UserDefaults.standard.set(transLastSerial, forKey: "transLastSerial")
         }
-        completion(true)
+
+//        get {
+//            UserDefaults.standard.integer(forKey: "transLastSerial")
+//        }
+    }
+//    private var transLastSerial: Int = UserDefaults.standard.integer(forKey: "transLastSerial")
+    private var activeTimer: Timer?
+
+    func refreshXFBTrans(completion: @escaping (Bool) -> Void) {
+        if let s = ymSessionID, isBackgroundRefreshEnabled {
+            Task {
+                do {
+                    let broker = try await XFBBroker(sessionID: s)
+                    let trans = try await broker.cardQuerynoPage()
+                    
+                    var latestTrans: XFBTrans?
+                    for t in trans {
+                        if let s = Int(t.serialno), s > transLastSerial {
+                            transLastSerial = s
+                            latestTrans = t
+                        }
+                    }
+                    
+                    if let t = latestTrans {
+                        sendLocalNotification(title: "Gugugu", body: t.shortDescription)
+                    }
+                    completion(true)
+                } catch {
+                    logger.error("refreshXFBTrans failed: \(error.localizedDescription)")
+                    completion(false)
+                }
+            }
+        }
+    }
+
+    func registerActiveTasks() {
+        activeTimer?.invalidate()
+        activeTimer = Timer.scheduledTimer(withTimeInterval: 60 * 2, repeats: true) { _ in
+            self.refreshXFBTrans { success in
+                logger.debug("active task refreshXFBTrans completed: \(success)")
+            }
+        }
+        activeTimer?.fire()
+        logger.info("active task timer started")
     }
     
     // 注册后台任务
     func registerBackgroundTasks() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
-            handleAppRefresh(task: task as! BGAppRefreshTask)
+            self.handleAppRefresh(task: task as! BGAppRefreshTask)
         }
         
         if isBackgroundRefreshEnabled {
@@ -57,10 +103,12 @@ struct BGRefreshManager {
 
     // 处理后台任务
     func handleAppRefresh(task: BGAppRefreshTask) {
+        activeTimer?.invalidate() // we are at Background Refresh state, timer not needed.
+
         scheduleAppRefresh() // 任务执行后再次调度
         
         // ==== 这里实现你的刷新逻辑 ====
-        bgRefreshXFBTrans { success in
+        refreshXFBTrans { success in
             task.setTaskCompleted(success: success)
         }
         
