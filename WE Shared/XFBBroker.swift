@@ -36,10 +36,65 @@ enum BrokerError: Error, LocalizedError {
     }
 }
 
-struct XFBResponse<T: Decodable>: Decodable {
+protocol XFBResponse: Decodable {
+    var statusCode: Int { get }
+    var message: String? { get }
+}
+
+struct XFBDataResponse<T: Decodable>: XFBResponse {
     var statusCode: Int
-    var message: String
+    var message: String?
     let data: T?
+}
+
+struct XFBTrans: Decodable {
+    static let formatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .currency
+        f.currencyCode = "CNY"
+        return f
+    }()
+
+    var type: String
+    var time: String
+    var dealtime: String
+    var address: String
+    var feeName: String
+    var serialno: String
+    var money: String
+    var businessName: String
+    var businessNum: String
+    var feeNum: String
+    var accName: String
+    var accNum: String
+    var perCode: String
+    var eWalletId: String
+    var monCard: String
+    var afterMon: String
+    var concessionsMon: String
+    
+    var shortDescription: String {
+        
+        var moneyString: String = money
+        if let moneyDouble = Double(money) {
+            moneyString = XFBTrans.formatter.string(from: moneyDouble as NSNumber) ?? money
+        }
+        
+        var afterMonString: String = afterMon
+        if let afterMonDouble = Double(afterMon) {
+            afterMonString = XFBTrans.formatter.string(from: afterMonDouble as NSNumber) ?? afterMon
+        }
+        
+        return "于 \(address) \(feeName) \(moneyString)，余额 \(afterMonString)"
+    }
+}
+
+struct XFBQueryTransResponse: XFBResponse {
+    var statusCode: Int
+    var message: String?
+    
+    var total: Int
+    var rows: [XFBTrans]
 }
 
 struct QRCodeResult: Decodable {
@@ -71,7 +126,7 @@ class XFBBroker {
     }
     
     func getCardMoney() async throws -> String {
-        let resp: XFBResponse<String> = try await post(url: XFB_WEBAPP.appending(path: "/card/getCardMoney"), body: ["ymId": ymID], sessionID: sessionID)
+        let resp: XFBDataResponse<String> = try await post(url: XFB_WEBAPP.appending(path: "/card/getCardMoney"), body: ["ymId": ymID], sessionID: sessionID)
         let val = resp.data!
         if val == "- - -" {
             logger.debug("What's wrong with you? How much is '- - -'")
@@ -80,8 +135,25 @@ class XFBBroker {
         return val
     }
     
+    func cardQuerynoPage(queryTime: Date? = nil) async throws -> [XFBTrans] {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd"
+        
+        let qt = formatter.string(from: queryTime ?? Date())
+        let resp: XFBQueryTransResponse = try await post(
+            url: XFB_WEBAPP.appending(path: "/routeauth/auth/route/user/cardQuerynoPage"),
+            body: [
+                "ymId": ymID,
+                "queryTime": qt,
+            ],
+            sessionID: sessionID
+        )
+        
+        return resp.rows
+    }
+    
     func getQRCode() async throws -> String {
-        let resp: XFBResponse<String> = try await post(url: XFB_WEBAPP.appending(path: "/card/getQRCode"), body: nil, sessionID: sessionID)
+        let resp: XFBDataResponse<String> = try await post(url: XFB_WEBAPP.appending(path: "/card/getQRCode"), body: nil, sessionID: sessionID)
 
         let val = resp.data!
         
@@ -89,7 +161,7 @@ class XFBBroker {
     }
     
     func getQRCodeResult(code: String) async throws -> QRCodeResult {
-        let resp: XFBResponse<QRCodeResult> = try await post(
+        let resp: XFBDataResponse<QRCodeResult> = try await post(
             url: XFB_WEBAPP.appending(path: "/card/getQRCodeResult"),
             body: [
                 "qrCode": code,
@@ -122,7 +194,7 @@ class XFBBroker {
         return request
     }
 
-    func get<T: Decodable>(url: URL, sessionID: String? = nil) async throws -> XFBResponse<T> {
+    func get<T: XFBResponse>(url: URL, sessionID: String? = nil) async throws -> T {
         guard let req = createRequest(httpMethod: "GET", url: url, sessionID: sessionID) else {
             logger.error("URL \(url) is invalid")
             throw BrokerError.badBaseURL
@@ -139,24 +211,24 @@ class XFBBroker {
             throw BrokerError.httpStatusError(code: resp.statusCode)
         }
         
-        let result: XFBResponse<T>
+        let result: T
         do {
-            let v = try JSONDecoder().decode(XFBResponse<T>.self, from: data)
+            let v = try JSONDecoder().decode(T.self, from: data)
             result = v
         } catch {
             throw BrokerError.invalidJSONBody(message: error.localizedDescription)
         }
 
         if result.statusCode != 0 {
-            logger.error("GET \(url): bad JSON statusCode \(result.statusCode), \(result.message)")
-            throw BrokerError.respStatusError(code: result.statusCode, message: result.message)
+            logger.error("GET \(url): bad JSON statusCode \(result.statusCode), \(result.message ?? "nil")")
+            throw BrokerError.respStatusError(code: result.statusCode, message: result.message ?? "nil")
         }
         
         logger.debug("GET \(url): success, \(data)")
         return result
     }
     
-    func post<T: Decodable>(url: URL, body: Encodable?, sessionID: String? = nil) async throws -> XFBResponse<T> {
+    func post<T: XFBResponse>(url: URL, body: Encodable?, sessionID: String? = nil) async throws -> T {
         guard var req = createRequest(httpMethod: "POST", url: url, sessionID: sessionID) else {
             logger.error("URL \(url) is invalid")
             throw BrokerError.badBaseURL
@@ -180,17 +252,17 @@ class XFBBroker {
             throw BrokerError.httpStatusError(code: resp.statusCode)
         }
         
-        let result: XFBResponse<T>
+        let result: T
         do {
-            let v = try JSONDecoder().decode(XFBResponse<T>.self, from: data)
+            let v = try JSONDecoder().decode(T.self, from: data)
             result = v
         } catch {
             throw BrokerError.invalidJSONBody(message: error.localizedDescription)
         }
 
         if result.statusCode != 0 {
-            logger.error("POST \(url): bad JSON statusCode \(result.statusCode), \(result.message)")
-            throw BrokerError.respStatusError(code: result.statusCode, message: result.message)
+            logger.error("GET \(url): bad JSON statusCode \(result.statusCode), \(result.message ?? "nil")")
+            throw BrokerError.respStatusError(code: result.statusCode, message: result.message ?? "nil")
         }
         
         logger.debug("POST \(url): success, \(data)")
