@@ -22,9 +22,6 @@ struct DebugView: View {
             } else {
                 Text("请在 iPhone 上同步 SessionID")
                 Button(action: {
-                    Task {
-                        await vm.refreshUserProfile()
-                    }
                 }) {
                     Text("Refresh")
                 }
@@ -32,6 +29,16 @@ struct DebugView: View {
             Spacer()
         }
         .ignoresSafeArea()
+        .onTapGesture {
+            Task {
+                await vm.refreshUserProfile()
+            }
+        }
+        .onAppear() {
+            Task {
+                await vm.refreshUserProfile()
+            }
+        }
     }
 
     func generateQRCode(from string: String) -> Image? {

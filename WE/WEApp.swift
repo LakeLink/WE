@@ -16,6 +16,9 @@ struct WEApp: App {
     var body: some Scene {
         WindowGroup {
             DebugView()
+                .onOpenURL { url in
+                    handle(url: url)
+                }
         }
         .onChange(of: scenePhase) {
             switch scenePhase {
@@ -28,6 +31,29 @@ struct WEApp: App {
                 print("App is backgrounded")
             @unknown default:
                 break
+            }
+        }
+    }
+
+    func handle(url: URL) {
+        guard url.scheme == "wxf460724ebd84135d" else { return }
+
+        if let components = URLComponents(url: url, resolvingAgainstBaseURL: true) {
+            var weChatCode: String?
+            var weChatState: String?
+            for item in components.queryItems ?? [] {
+                print("Key: \(item.name), Value: \(item.value ?? "")")
+                switch item.name {
+                case "code":
+                    weChatCode = item.value!
+                case "state":
+                    weChatState = item.value!
+                default:
+                    logger.warning("微信的 Callback 包含了未知的 queryItem: Key: \(item.name), Value: \(item.value ?? "")")
+                }
+            }
+            Task {
+                try! await XFBBroker(weChatState: weChatState!, weChatCode: weChatCode!)
             }
         }
     }

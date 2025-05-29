@@ -31,7 +31,20 @@ func string(for value: Any) -> String {
     return String(describing: value)
 }
 
+func xfbWeChatLoginStep1(_ openURL: OpenURLAction) {
+    Task {
+        let state = try await XFBBroker.obtainWeChatLoginState()
+        if let url = URL(string: "weixin://app/wxf460724ebd84135d/auth/?scope=snsapi_userinfo&state=\(state)&component_appid=wx8fddf03d92fd6fa9") {
+            await openURL(url) { success in
+                logger.info("openURL: success=\(success)")
+            }
+        }
+    }
+}
+
 struct DebugView: View {
+    @Environment(\.openURL) var openURL
+    @Environment(\.scenePhase) var scenePhase
     @StateObject private var vm = DebugViewModel()
     @AppStorage("isBackgroundRefreshEnabled") private var isBackgroundRefreshEnabled: Bool = false
 
@@ -47,6 +60,20 @@ struct DebugView: View {
                             .scaledToFit()
                     } else {
                         Text("Here goes our QR code.")
+                    }
+                }
+                .onChange(of: scenePhase) {
+                    switch scenePhase {
+                    case .active:
+                        Task {
+                            await vm.refreshUserProfile()
+                        }
+//                    case .inactive:
+//                        print("App is inactive")
+//                    case .background:
+//                        print("App is backgrounded")
+                    default:
+                        break
                     }
                 }
                 .sensoryFeedback(.impact, trigger: vm.qrCodeImage)
@@ -83,6 +110,11 @@ struct DebugView: View {
                             .textInputAutocapitalization(.never)
                             .disableAutocorrection(true)
                             .keyboardType(.asciiCapable)
+                    }
+                    Button(action: {
+                        xfbWeChatLoginStep1(openURL)
+                    }) {
+                        Text("通过微信获取阁下的 SessionID")
                     }
                     Button(action: {
                         vm.toWatch()

@@ -24,21 +24,12 @@ class DebugViewModel: ObservableObject {
     private var xfb: XFBBroker? = nil
     
     init() {
-        sessionID = UserDefaults.standard.string(forKey: "ymSessionID") ?? ""
+        // sessionID = UserDefaults.standard.string(forKey: "ymSessionID") ?? ""
+        sessionID = wc.receivedApplicationContext?["sessionID"] as? String ?? UserDefaults.standard.string(forKey: "ymSessionID") ?? ""
     }
     
     func refreshUserProfile() async {
         do {
-            let currentTime = Date.now.formatted()
-            let msg = [
-                "watch_message": "Hello from Watch! ⌚️",
-                "sent_at": currentTime
-            ]
-            wc.sendMessageToPhone(message: msg) { reply in
-                logger.info("sendMessageToPhone: reply=\(reply)")
-            } errorHandler: { error in
-                logger.error("sendMessageToPhone: error=\(error.localizedDescription)")
-            }
             if let s = wc.receivedApplicationContext?["sessionID"] as? String {
                 sessionID = s
                 xfb = try await XFBBroker(sessionID: sessionID)

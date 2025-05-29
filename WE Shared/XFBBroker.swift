@@ -106,7 +106,65 @@ struct QRCodeResult: Decodable {
     var monDealCur: String?
 }
 
+final class RedirectHandler: NSObject, URLSessionTaskDelegate {
+    var continuation: CheckedContinuation<URL?, Never>?
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        // Pass back the redirect location via the continuation
+        continuation?.resume(returning: request.url)
+        continuation = nil
+        // Don't follow the redirect
+        completionHandler(nil)
+    }
+}
+
+func fetchRedirectLocationAsync(url: URL) async -> URL? {
+    let handler = RedirectHandler()
+    let session = URLSession(configuration: .default, delegate: handler, delegateQueue: nil)
+
+    // Use continuation to suspend until redirect or task finishes
+    return await withCheckedContinuation { continuation in
+        handler.continuation = continuation
+        let task = session.dataTask(with: url) { _, response, error in
+            // If no redirect, resume with nil (done)
+            if handler.continuation != nil {
+                continuation.resume(returning: nil)
+                handler.continuation = nil
+            }
+        }
+        task.resume()
+    }
+}
+
 class XFBBroker {
+
+    static func obtainWeChatLoginState() async throws -> String {
+        var components = URLComponents(string: "https://auth.xiaofubao.com/auth/user/third/getCode")!
+        components.queryItems = [
+            URLQueryItem(name: "callBackUrl", value: "https://nonexsiting.xiaofubao.com/?platform=WECHAT_H5&schoolCode=20090820&thirdAppid=wx8fddf03d92fd6fa9")
+        ]
+
+        if let u = await fetchRedirectLocationAsync(url: components.url!) {
+            logger.info("从 auth.xiaofubao.com 处获悉，我们需要前往 \(u)")
+            
+            var state: String?
+            if let components = URLComponents(url: u, resolvingAgainstBaseURL: true) {
+                for item in components.queryItems ?? [] {
+                    print("Key: \(item.name), Value: \(item.value ?? "")")
+                    switch item.name {
+                    case "state":
+                        state = item.value!
+                    default:
+                        logger.warning("未知的 queryItem: Key: \(item.name), Value: \(item.value ?? "")")
+                    }
+                }
+            }
+            return state!
+        } else {
+            throw BrokerError.respStatusError(code: -10, message: "无法获得 Redirect 目的地")
+        }
+    }
+
     let baseHeaders: [String: String] = [:]
     let okRange = 200 ..< 300
     
@@ -123,6 +181,23 @@ class XFBBroker {
         self.init(sessionID: sessionID, ymID: "")
         userInfo = try await getDefaultLoginInfo()
         ymID = userInfo["id"] as! String
+    }
+    
+    convenience init(weChatState: String, weChatCode: String) async throws {
+        var components = URLComponents(string: "https://auth.xiaofubao.com/wechat/open/oauth/callback/wx8fddf03d92fd6fa9/20090820")!
+        components.queryItems = [
+            URLQueryItem(name: "code", value: weChatCode),
+            URLQueryItem(name: "state", value: weChatState)
+        ]
+
+        if let u = await fetchRedirectLocationAsync(url: components.url!) {
+            logger.info("使用微信处获得的 code 得到了URL: \(u)")
+        } else {
+            throw BrokerError.respStatusError(code: -10, message: "无法获得 Redirect 目的地")
+        }
+
+        self.init(sessionID: "", ymID: "")
+
     }
     
     func getCardMoney() async throws -> String {
